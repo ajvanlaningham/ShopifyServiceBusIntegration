@@ -1,0 +1,25 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.6.33723.286
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ShopifyServiceBusIntegration", "ShopifyServiceBusIntegration\ShopifyServiceBusIntegration.csproj", "{C2ED84B3-5EF0-47FF-84A6-BBB7620BCCE1}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{C2ED84B3-5EF0-47FF-84A6-BBB7620BCCE1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C2ED84B3-5EF0-47FF-84A6-BBB7620BCCE1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C2ED84B3-5EF0-47FF-84A6-BBB7620BCCE1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C2ED84B3-5EF0-47FF-84A6-BBB7620BCCE1}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {F5B2136A-F379-4F24-9D87-382F941B42CD}
+	EndGlobalSection
+EndGlobal
