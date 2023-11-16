@@ -51,7 +51,7 @@ namespace ShopifyServiceBusIntegration
         private static FulfillmentOrderService _fulfillmentOrderService;
         private static ShopifySharp.Order _Order;
 
-
+        //CONFIRMS THAT ORDER SHOULD BE PROCESSED AT ALL AND CALLS ORDER GENERATION FUNCTION
         private static async Task<string> OrderProcessTask (string shoifyStoreUrl, string password, string apiKey, ILogger log)
         {
             string FinalBodyString = string.Empty;
@@ -74,7 +74,7 @@ namespace ShopifyServiceBusIntegration
             if (acctNumber == _GeneralEcomNumber && order.PaymentGatewayNames.FirstOrDefault() == "Pay by Invoice")
             {
                 log.LogInformation("Potential Fraud. Customer requested 'Pay by Invoice' but has Generic account");
-                await HoldOrderFulfillment(order.log);
+                await HoldOrderFulfillment(order, log);
             }
             else
             {
@@ -90,7 +90,66 @@ namespace ShopifyServiceBusIntegration
             {
                 return null;
             }
-
         }
+
+        //FINDS CUSTOMER ACCOUNT NUMBER OR ASSIGNS DEFAULT ACCOUNT NUMBER IF NEW ECOMM CUSTOMER
+        private async static Task<string> GetAccountNumber(string Tags)
+        {
+            string[] tags = Tags.Split(',').ToArray();
+            foreach (string tag in tags)
+            {
+                if (tag.StartsWith("AR_"))
+                {
+                    return tag.Substring(3);
+                }
+                else if (tag.Contains("INC") || tag.Contains("REF"))
+                {
+                    return tag;
+                }
+            }
+            return _GeneralEcomNumber;
+        }
+
+        //FINDS AND ASSIGNS THE ORACLE "SITE_USE_ID" FOR SHIPPING, IF RETURNING CUSTOMER
+        private async static Task<string> GetSiteUseID(string Tags)
+        {
+            string[] tags = Tags.Split(',').ToArray();
+            foreach (string tag in tags)
+            {
+                if (tag.Contains("SUID"))
+                {
+                    return tag.Substring(6);
+                }
+            }
+            return "";
+        }
+
+        //HOLDS SHOPIFY ORDER WHEN CUSTOMER REQUESTS PAY-BY-INVOICE BUT NO PRE-APPROVED CREDIT ACCOUNT IS KNOWN
+        private static async Task HoldOrderFulfillment(ShopifySharp.Order order, ILogger log)
+        {
+            var fulfillmentOrders = await _fulfillmentOrderService.ListAsync(order.Id.Value);
+            log.LogInformation("Current shopify fullfillment orders: " + fulfillmentOrders.ToString());
+
+            try
+            {
+                await _fulfillmentOrderService.HoldAsync(fulfillmentOrders.FirstOrDefault().Id.Value, new FulfillmentHold()
+                {
+                    Reason = "high_risk_of_fraud",
+                    ReasonNotes = "Invoice order but no acct number found"
+                });
+            }
+            catch (Exception ex)
+            {
+                log.LogInformation($"Error while listing fulfillment orders: {ex}");
+            }
+
+            await _orderService.UpdateAsync(order.Id.Value, new ShopifySharp.Order()
+            {
+                Note = "Error, Invoice order but no acct number found",
+                Tags = order.Tags + "InvoiceError",
+            });
+        }
+
+
     }
 }
