@@ -16,6 +16,7 @@ using SharedModels;
 using ShopifySharp.GraphQL;
 using Product = ShopifySharp.Product;
 using Microsoft.AspNetCore.Builder;
+using System.Globalization;
 
 namespace ShopifyServiceBusIntegration
 {
@@ -59,6 +60,11 @@ namespace ShopifyServiceBusIntegration
             CountryCode, 
             AreaCode,
             LocalNumber
+        }
+
+        private enum SupportedBoxExtension
+        {
+            BXA,BXC,BXD,BXE,BXG,BXH,BXZ
         }
 
         private static string _AcctNum = _GeneralEcomNumber;
@@ -341,29 +347,105 @@ namespace ShopifyServiceBusIntegration
         private static SharedModels.LinesList GetDividedLineItems(ShopifySharp.LineItem line, Product product)
         {
             SharedModels.LinesList newLinesList = new LinesList();
-            var LinesList = new List<SharedModels.Line>();
+            var linesList = new List<SharedModels.Line>();
 
-            bool isDrumSize;
+            bool isDrumSize = false;
 
             double discount = ((double)(Convert.ToDouble(line.DiscountAllocations.FirstOrDefault()?.Amount) / line.Quantity));
 
-            List<string> availableBoxExtensions = product.Tags.Split(',')
+            List<SupportedBoxExtension> availableBoxExtensions = product.Tags.Split(',')
                 .Select(tag => tag.Trim())
-                .Where(tag => tag.StartsWith("BX") && IsSupportedBoxExtension(tag))
+                .Where(tag => IsSupportedBoxExtension(tag))
+                .Select(tag => Enum.Parse<SupportedBoxExtension>(tag.ToUpper()))
                 .ToList();
 
-            foreach(Line dividedLineItem  in LinesList)
+            List<ShopifySharp.ProductVariant> variants = product.Variants.ToList();
+            foreach (ShopifySharp.ProductVariant variant in variants)
+            {
+                if (variant.SKU.Contains("/DR"))
+                {
+                    isDrumSize = true;
+                }
+            }
+
+            if (isDrumSize)
+            {
+                SharedModels.Line newLine = GenerateSingleLine(line, discount);
+                linesList.Add(newLine);
+            }
+
+
+            foreach (Line dividedLineItem  in linesList)
             {
                 newLinesList.LineItems.Add(dividedLineItem);
             }
             return newLinesList;
         }
 
+        public static SharedModels.Line GenerateSingleLine(ShopifySharp.LineItem line, double discount)
+        {
+            SharedModels.Line newLine = new SharedModels.Line();
+            try
+            {
+                newLine = new SharedModels.Line()
+                {
+                    UnitPrice = Math.Round(Convert.ToDouble(line.Price) - discount, 2).ToString("#.00", CultureInfo.InvariantCulture),
+                    CalculatePriceFlag = "N",
+                    PPGItemNumber = line.SKU,
+                    CustomerPartNumber = line.ProductId,
+                    OrderedQuantity = line.Quantity.Value,
+                    OrderedQuantityUOM = GetQuantityConverter(Convert.ToInt32(line.Grams.Value)),
+                    PromiseDate = "",
+                    EarliestAcceptableDate = _Order.CreatedAt.Value.AddDays(5).ToString("yyyy-MM-dd hh:mm:ss"),
+                    RequestDate = _Order.CreatedAt.Value.ToString("yyyy-MM-dd hh:mm:ss"),
+                    ScheduledShipDate = _Order.CreatedAt.Value.AddDays(2).ToString("yyyy-MM-dd hh:mm:ss"),
+                    DeliveryLeadTime = 5,
+                    ExpeditedShipFlag = GetExpeditedFlag(),
+                    FreightCarrierCode = "GENERIC",
+                    FreightTermsCode = null,
+                    ShipMethodCode = null,
+                    OrderDiscount = "",
+                    FreightChargesCode = null,
+                    FobPointCode = ""
+                };
+            }
+            catch (Exception ex)
+            {
 
+            }
+            
+            return newLine;
+        }
+
+        //PULLS SUPPORTED BOX EXTENSIONS FROM SUPPORTED LIST
         private static bool IsSupportedBoxExtension(string tag)
         {
-            string[] supportedBoxExtensions = { "BXC", "BXA", "BXE", "BXZ", "BXG", "BXH", "BXD" };
-            return supportedBoxExtensions.Contains(tag);
+            tag = tag.ToUpper();
+            return Enum.TryParse(tag, out SupportedBoxExtension boxExtension);
+        }
+
+        //DEFINES UNIT OF MEASURE FROM GRAMS (DEFAULT IN SHOPIFY) TO LBS (CURRENT DEFAULT IN ORACLE)
+        private static string GetQuantityConverter(int grams)
+        {
+            //TODO: update switch case in case of alternatives/new products
+            switch (grams)
+            {
+                case 454:
+                    return "LBS";
+            }
+            return "LBS";
+        }
+
+        //CHECKS ORDER FOR EXPEDITED SHIPPING REQUEST FROM CUSTOMER
+        private static string GetExpeditedFlag()
+        {
+            string flag = "N";
+            if (_Order.ShippingLines.Any())
+            {
+                flag = _Order.ShippingLines.FirstOrDefault().Code.Contains("Standard") ? "N" : "Y";
+            }
+
+            return flag;
         }
     }
 }
