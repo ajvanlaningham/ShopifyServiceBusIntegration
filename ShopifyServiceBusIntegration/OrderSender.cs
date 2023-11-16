@@ -8,6 +8,10 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using System.Text;
+using ShopifySharp;
+using System.Collections.Generic;
+using ShopifySharp.Lists;
+using System.Linq;
 
 namespace ShopifyServiceBusIntegration
 {
@@ -38,5 +42,54 @@ namespace ShopifyServiceBusIntegration
             return body;
         }
 
+        private const string _GeneralEcomNumber = "0025616INC";
+        private static OrderService _shopifyOrderService;
+        private static CustomerService _customerService;
+        private static ProductService _productService;
+        private static OrderService _orderService;
+        private static FulfillmentOrderService _fulfillmentOrderService;
+        private static ShopifySharp.Order _Order;
+
+
+        private static async Task<string> OrderProcessTask (string shoifyStoreUrl, string password, string apiKey, ILogger log)
+        {
+            string FinalBodyString = string.Empty;
+
+            _shopifyOrderService = new OrderService(shoifyStoreUrl, password);
+            _customerService = new CustomerService(shoifyStoreUrl, password);
+            _productService = new ProductService(shoifyStoreUrl, password);
+            _orderService = new OrderService(shoifyStoreUrl, password);
+            _fulfillmentOrderService = new  FulfillmentOrderService(shoifyStoreUrl, password);
+
+            ListResult<ShopifySharp.Order> orders = await _orderService.ListAsync();
+            Order order = orders.Items.First();
+
+            _Order = order;
+
+            Customer customer = await _customerService.GetAsync(order.Customer.Id.Value);
+            string siteUseId = await GetSiteUseID(customer.Tags);
+            string acctNumber = await GetAccountNumber(customer.Tags);
+
+            if (acctNumber == _GeneralEcomNumber && order.PaymentGatewayNames.FirstOrDefault() == "Pay by Invoice")
+            {
+                log.LogInformation("Potential Fraud. Customer requested 'Pay by Invoice' but has Generic account");
+                await HoldOrderFulfillment(order.log);
+            }
+            else
+            {
+                FinalBodyString = await ProcessOrder(acctNumber, siteUseId, log);
+            }
+
+            SharedModels.Models.OrderObject orderObject = JsonConvert.DeserializeObject<OrderObject>(FinalBodyString);
+            if (orderObject.LinesList.Line.Any())
+            {
+                return FinalBodyString;
+            }
+            else
+            {
+                return null;
+            }
+
+        }
     }
 }
