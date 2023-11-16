@@ -145,7 +145,7 @@ namespace ShopifyServiceBusIntegration
 
             try
             {
-                await _fulfillmentOrderService.HoldAsync(fulfillmentOrders.FirstOrDefault().Id.Value, new FulfillmentHold()
+                await _fulfillmentOrderService.HoldAsync(fulfillmentOrders.FirstOrDefault().Id.Value, new ShopifySharp.FulfillmentHold()
                 {
                     Reason = "high_risk_of_fraud",
                     ReasonNotes = "Invoice order but no acct number found"
@@ -177,9 +177,9 @@ namespace ShopifyServiceBusIntegration
 
                     Product product = await _productService.GetAsync(line.ProductId.Value);
 
-                    var dividedItemList = GetDividedLineItems(line.ProductId.Value);
+                    SharedModels.LinesList dividedItemList = GetDividedLineItems(line, product);
 
-                    foreach (var dividedItem in dividedItemList.line)
+                    foreach (Line dividedItem in dividedItemList.LineItems)
                     {
                         linesList.Add(dividedItem);
                     }
@@ -335,5 +335,35 @@ namespace ShopifyServiceBusIntegration
             return str1 = str1.Length <= limit ? str1 : str1.Substring(0, limit);
         }
 
+        //TAKES EVERY SHOPIFY ORDER LINE ITEM AND BREAKS IT INTO LARGEST AVAILABLE UNIT-SIZES POSSIBLE TO FULFILL ORDER
+        //ADDS EACH UNIT TO THE ORACLE ORDER'S LINE ITEM LIST
+        //RETURNS THE ORACLE ORDER LINE ITEM LIST
+        private static SharedModels.LinesList GetDividedLineItems(ShopifySharp.LineItem line, Product product)
+        {
+            SharedModels.LinesList newLinesList = new LinesList();
+            var LinesList = new List<SharedModels.Line>();
+
+            bool isDrumSize;
+
+            double discount = ((double)(Convert.ToDouble(line.DiscountAllocations.FirstOrDefault()?.Amount) / line.Quantity));
+
+            List<string> availableBoxExtensions = product.Tags.Split(',')
+                .Select(tag => tag.Trim())
+                .Where(tag => tag.StartsWith("BX") && IsSupportedBoxExtension(tag))
+                .ToList();
+
+            foreach(Line dividedLineItem  in LinesList)
+            {
+                newLinesList.LineItems.Add(dividedLineItem);
+            }
+            return newLinesList;
+        }
+
+
+        private static bool IsSupportedBoxExtension(string tag)
+        {
+            string[] supportedBoxExtensions = { "BXC", "BXA", "BXE", "BXZ", "BXG", "BXH", "BXD" };
+            return supportedBoxExtensions.Contains(tag);
+        }
     }
 }
