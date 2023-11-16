@@ -9,6 +9,9 @@
     <PackageReference Include="ShopifySharp" Version="6.8.0-b131" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\SharedModels\SharedModels.csproj" />
+  </ItemGroup>
+  <ItemGroup>
     <None Update="host.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>

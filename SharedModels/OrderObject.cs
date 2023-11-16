@@ -113,7 +113,7 @@ namespace SharedModels
     public class LinesList
     {
         [JsonPropertyName("line")]
-        public List<Line> LineItem { get; set; }
+        public List<Line> LineItems { get; set; }
     }
 
     public class Line

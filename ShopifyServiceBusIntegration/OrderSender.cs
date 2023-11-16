@@ -13,6 +13,8 @@ using System.Collections.Generic;
 using ShopifySharp.Lists;
 using System.Linq;
 using SharedModels;
+using ShopifySharp.GraphQL;
+using Product = ShopifySharp.Product;
 
 namespace ShopifyServiceBusIntegration
 {
@@ -148,6 +150,79 @@ namespace ShopifyServiceBusIntegration
                 Note = "Error, Invoice order but no acct number found",
                 Tags = order.Tags + "InvoiceError",
             });
+        }
+
+        private static async Task<string> ProcessOrder(string acctNum, string siteUseId, ILogger log)
+        {
+            OrderObject orderObj = GenerateOrderObject(acctNum, siteUseId, log);
+            var linesList =  new List<SharedModels.Line>();
+
+            foreach (ShopifySharp.LineItem line in _Order.LineItems)
+            {
+                if (!line.SKU.Contains("Panel"))
+                {
+                    line.SKU = line.SKU.Split('-').First();
+                    double discount = ((double)(Convert.ToDouble(line.DiscountAllocations.FirstOrDefault()?.Amount) / line.Quantity));
+
+                    Product product = await _productService.GetAsync(line.ProductId.Value);
+
+                    var dividedItemList = GetDividedLineItems(line.ProductId.Value);
+
+                    foreach (var dividedItem in dividedItemList.line)
+                    {
+                        linesList.Add(dividedItem);
+                    }
+                }
+                else // PANELS/SAMPLE ORDERS ARE HANDLED BY A THIRD PARTY VENDER
+                {
+                    await _orderService.UpdateAsync(_Order.Id.Value, new ShopifySharp.Order()
+                    {
+                        Note = "Panel Order," + _Order.Note,
+                        Tags = "Panel," + _Order.Tags
+                    });
+                }
+            }
+
+            orderObj.OrderLinesList.LineItems = linesList;
+
+            var json = JsonConvert.SerializeObject(orderObj);
+            log.LogInformation($"{json}");
+
+            return json;
+        }
+
+        //CONVERTS SHOPIFY ORDER INTO ORACLE ORDER-OBJECT
+        private static OrderObject GenerateOrderObject(string acctNumber, string siteUseID, ILogger log)
+        {
+            OrderObject orderObj = new OrderObject();
+            if (_Order.ShippingAddress.FirstName == null)
+            {
+                _Order.ShippingAddress.FirstName = "";
+            }
+
+            
+            try
+            {
+                ShopifySharp.Address OrderAddress = _Order.ShippingAddress;
+
+                bool hasCompany = _Order.ShippingAddress.Company == "";
+                orderObj.CustomerRecord = new CustomerRecord()
+                {
+                    AccountNumber = acctNumber,
+                    SiteUseID = siteUseID,
+                    Address1 = GetAddress1(),
+                    Address2 = hasCompany ? _Order.ShippingAddress.Company : _Order.ShippingAddress.Address1,
+                    Address3 = hasCompany ? _Order.ShippingAddress.Address1 : _Order.ShippingAddress.Address2 ?? "",
+                    Address4 = !hasCompany ? _Order.ShippingAddress.Address2 ?? "" : "",
+                    City = _Order.ShippingAddress
+                };
+            }
+            catch (Exception ex)
+            {
+                log.LogInformation("Error while generating Order Object -- Cutomer record. Error: " + ex.ToString());
+            }
+            
+            
         }
 
 
