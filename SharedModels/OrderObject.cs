@@ -83,7 +83,7 @@ namespace SharedModels
     public class Header
     {
         [JsonPropertyName("ordered_date")]
-        public DateTime OrderedDate { get; set; }
+        public string OrderedDate { get; set; }
 
         [JsonPropertyName("orig_sys_document_reference")]
         public long OrderReferenceID { get; set; }

@@ -15,6 +15,7 @@ using System.Linq;
 using SharedModels;
 using ShopifySharp.GraphQL;
 using Product = ShopifySharp.Product;
+using Microsoft.AspNetCore.Builder;
 
 namespace ShopifyServiceBusIntegration
 {
@@ -53,6 +54,16 @@ namespace ShopifyServiceBusIntegration
         private static FulfillmentOrderService _fulfillmentOrderService;
         private static ShopifySharp.Order _Order;
 
+        private enum PhoneNumberComponent
+        {
+            CountryCode, 
+            AreaCode,
+            LocalNumber
+        }
+
+        private static string _AcctNum = _GeneralEcomNumber;
+        private static string _SiteId = "";
+
         //CONFIRMS THAT ORDER SHOULD BE PROCESSED AT ALL AND CALLS ORDER GENERATION FUNCTION
         private static async Task<string> OrderProcessTask (string shoifyStoreUrl, string password, string apiKey, ILogger log)
         {
@@ -65,22 +76,22 @@ namespace ShopifyServiceBusIntegration
             _fulfillmentOrderService = new  FulfillmentOrderService(shoifyStoreUrl, password);
 
             ListResult<ShopifySharp.Order> orders = await _orderService.ListAsync();
-            Order order = orders.Items.First();
+            ShopifySharp.Order order = orders.Items.First();
 
             _Order = order;
 
-            Customer customer = await _customerService.GetAsync(order.Customer.Id.Value);
-            string siteUseId = await GetSiteUseID(customer.Tags);
-            string acctNumber = await GetAccountNumber(customer.Tags);
+            ShopifySharp.Customer customer = await _customerService.GetAsync(order.Customer.Id.Value);
+            _SiteId = await GetSiteUseID(customer.Tags);
+            _AcctNum = await GetAccountNumber(customer.Tags);
 
-            if (acctNumber == _GeneralEcomNumber && order.PaymentGatewayNames.FirstOrDefault() == "Pay by Invoice")
+            if (_AcctNum == _GeneralEcomNumber && order.PaymentGatewayNames.FirstOrDefault() == "Pay by Invoice")
             {
                 log.LogInformation("Potential Fraud. Customer requested 'Pay by Invoice' but has Generic account");
                 await HoldOrderFulfillment(order, log);
             }
             else
             {
-                FinalBodyString = await ProcessOrder(acctNumber, siteUseId, log);
+                FinalBodyString = await ProcessOrder(log);
             }
 
             SharedModels.OrderObject orderObject = JsonConvert.DeserializeObject<OrderObject>(FinalBodyString);
@@ -152,9 +163,9 @@ namespace ShopifyServiceBusIntegration
             });
         }
 
-        private static async Task<string> ProcessOrder(string acctNum, string siteUseId, ILogger log)
+        private static async Task<string> ProcessOrder(ILogger log)
         {
-            OrderObject orderObj = GenerateOrderObject(acctNum, siteUseId, log);
+            OrderObject orderObj = GenerateOrderObject(log);
             var linesList =  new List<SharedModels.Line>();
 
             foreach (ShopifySharp.LineItem line in _Order.LineItems)
@@ -192,7 +203,7 @@ namespace ShopifyServiceBusIntegration
         }
 
         //CONVERTS SHOPIFY ORDER INTO ORACLE ORDER-OBJECT
-        private static OrderObject GenerateOrderObject(string acctNumber, string siteUseID, ILogger log)
+        private static OrderObject GenerateOrderObject(ILogger log)
         {
             OrderObject orderObj = new OrderObject();
             if (_Order.ShippingAddress.FirstName == null)
@@ -200,31 +211,129 @@ namespace ShopifyServiceBusIntegration
                 _Order.ShippingAddress.FirstName = "";
             }
 
-            
+            orderObj.CustomerRecord = GenerateCustomerRecord(log);
+            orderObj.OrderHeader = GenerateOrderHeader(log);
+            orderObj.OrderLinesList = new LinesList();
+            orderObj.POU = "US_CNR_OU";
+
+            return orderObj;
+        }
+
+        //CONVERTS SHOPIFY-ORDER-INFORMATION INTO ORACLE CUSTOMER RECORD
+        private static CustomerRecord GenerateCustomerRecord(ILogger log)
+        {
+            CustomerRecord record = new CustomerRecord();
             try
             {
-                ShopifySharp.Address OrderAddress = _Order.ShippingAddress;
+                ShopifySharp.Address orderAddress = _Order.ShippingAddress;
+                ShopifySharp.Customer customer = _Order.Customer;
 
-                bool hasCompany = _Order.ShippingAddress.Company == "";
-                orderObj.CustomerRecord = new CustomerRecord()
+                bool hasCompany = (orderAddress.Company != null);
+                record = new CustomerRecord()
                 {
-                    AccountNumber = acctNumber,
-                    SiteUseID = siteUseID,
+                    AccountNumber = _AcctNum,
+                    SiteUseID = _SiteId,
                     Address1 = GetAddress1(),
-                    Address2 = hasCompany ? _Order.ShippingAddress.Company : _Order.ShippingAddress.Address1,
-                    Address3 = hasCompany ? _Order.ShippingAddress.Address1 : _Order.ShippingAddress.Address2 ?? "",
-                    Address4 = !hasCompany ? _Order.ShippingAddress.Address2 ?? "" : "",
-                    City = _Order.ShippingAddress
+                    Address2 = hasCompany ? orderAddress.Company : orderAddress.Address1,
+                    Address3 = hasCompany ? orderAddress.Address1 : orderAddress.Address2 ?? "",
+                    Address4 = !hasCompany ? orderAddress.Address2 ?? "" : "",
+                    City = orderAddress.City,
+                    State = orderAddress.Province,
+                    PostalCode = orderAddress.Zip,
+                    Country = orderAddress.CountryCode,
+                    LocationID = "",
+                    ContactID = "",
+                    ContactFirstName = orderAddress.FirstName,
+                    ContactMiddleName = "",
+                    ContactLastName = orderAddress.LastName,
+                    ContactEmail = customer.Email,
+                    PhoneCountryCode = GetPhoneNumberComponent(customer.Phone, PhoneNumberComponent.CountryCode),
+                    PhoneAreaCode = GetPhoneNumberComponent(customer.Phone, PhoneNumberComponent.AreaCode),
+                    PhoneNumber = GetPhoneNumberComponent(customer.Phone, PhoneNumberComponent.LocalNumber)
                 };
             }
             catch (Exception ex)
             {
                 log.LogInformation("Error while generating Order Object -- Cutomer record. Error: " + ex.ToString());
             }
-            
-            
+            return record;
         }
 
+        //CONVERTS SHOPIFY-ORDER-INFORMATION INTO ORACLE ORDER HEADER
+        private static Header GenerateOrderHeader(ILogger log)
+        {
+            Header header = new Header();
+            try
+            {
+                header = new Header()
+                {
+                    OrderedDate = _Order.CreatedAt.Value.ToString("yyyy-MM-dd hh:mm:ss"),
+                    OrderReferenceID = _Order.Id.Value,
+                    CustomerPONumber = _Order.Note != null ? $"{_Order.Name} + {LimitCharacter(_Order.Note, 20)}" : _Order.Name,
+                    PaymentTerms = "", // _Order.PaymentGatewayNames.FirstOrDefault() == "Pay by Invoice" ? "net-30" : "net-5"
+                    PaymentTypeCode = "",
+                    FreightChargesCode = "",
+                    FOBPointCode = "",
+                    FreightCarrierCode = "",
+                    FreightTermsCode = ""
+                };
+            }
+            catch (Exception ex)
+            {
+                log.LogInformation("Error while generating Order Object -- Header Object. Error: " + ex.ToString());
+            }
+            return header; 
+        }
+
+        //RETURNS ADDRESS ONE IN PREFERRED FORMAT FOR ORACLE, EITHER CUSTOMER'S COMPANY OR CUSTOMER NAME
+        private static string GetAddress1()
+        {
+            string address1 = "";
+            if (_Order.BillingAddress.Company != null)
+            {
+                return address1 = $"*{_Order.BillingAddress.Company.ToUpper()}*";
+            }
+            else
+            {
+                return address1 = $"* {_Order.ShippingAddress.FirstName.ToUpper()} {_Order.ShippingAddress.LastName.ToUpper()}*";
+            }
+        }
+
+        //BREAKS UP PHONE NUMBER INTO COUNTRY-CODE, AREA-CODE, AND LOCAL-NUMBER, THEN RETURNS PER COMPONENT SWITCH
+        private static string GetPhoneNumberComponent(string phoneNumber, PhoneNumberComponent component)
+        {
+            if (string.IsNullOrEmpty(phoneNumber)) return "";
+
+            var numericPhoneNumber = new string(phoneNumber.Where(char.IsDigit).ToArray());
+
+            if (numericPhoneNumber.Length == 10)
+            {
+                return component switch
+                {
+                    PhoneNumberComponent.CountryCode => "",
+                    PhoneNumberComponent.AreaCode => numericPhoneNumber.Substring(0, 3),
+                    PhoneNumberComponent.LocalNumber => numericPhoneNumber.Substring(3),
+                    _ => ""
+                };
+            }
+            else if (numericPhoneNumber.Length == 11)
+            {
+                return component switch
+                {
+                    PhoneNumberComponent.CountryCode => numericPhoneNumber.Substring(0, 1),
+                    PhoneNumberComponent.AreaCode => numericPhoneNumber.Substring(1, 3),
+                    PhoneNumberComponent.LocalNumber => numericPhoneNumber.Substring(4),
+                    _ => ""
+                };
+            }
+
+            return "";
+        }
+
+        private static string LimitCharacter(string str1, int limit)
+        {
+            return str1 = str1.Length <= limit ? str1 : str1.Substring(0, limit);
+        }
 
     }
 }
