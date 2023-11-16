@@ -12,6 +12,7 @@ using ShopifySharp;
 using System.Collections.Generic;
 using ShopifySharp.Lists;
 using System.Linq;
+using SharedModels;
 
 namespace ShopifyServiceBusIntegration
 {
@@ -80,8 +81,8 @@ namespace ShopifyServiceBusIntegration
                 FinalBodyString = await ProcessOrder(acctNumber, siteUseId, log);
             }
 
-            SharedModels.Models.OrderObject orderObject = JsonConvert.DeserializeObject<OrderObject>(FinalBodyString);
-            if (orderObject.LinesList.Line.Any())
+            SharedModels.OrderObject orderObject = JsonConvert.DeserializeObject<OrderObject>(FinalBodyString);
+            if (orderObject.OrderLinesList.LineItems.Any())
             {
                 return FinalBodyString;
             }
