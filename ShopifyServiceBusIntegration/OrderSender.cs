@@ -54,6 +54,7 @@ namespace ShopifyServiceBusIntegration
         private static OrderService _orderService;
         private static FulfillmentOrderService _fulfillmentOrderService;
         private static ShopifySharp.Order _Order;
+        private static ILogger _logger;
 
         private enum PhoneNumberComponent
         {
@@ -64,7 +65,12 @@ namespace ShopifyServiceBusIntegration
 
         private enum SupportedBoxExtension
         {
-            BXA,BXC,BXD,BXE,BXG,BXH,BXZ
+            BXA, BXC, BXD, BXE, BXG, BXH, BXZ
+        }
+
+        private enum SKUTypes
+        {
+            PCTA, PCTT, PCAT, PCTB, PCST, PCMT, PCFG, PCT, PCM
         }
 
         private static string _AcctNum = _GeneralEcomNumber;
@@ -80,6 +86,7 @@ namespace ShopifyServiceBusIntegration
             _productService = new ProductService(shoifyStoreUrl, password);
             _orderService = new OrderService(shoifyStoreUrl, password);
             _fulfillmentOrderService = new  FulfillmentOrderService(shoifyStoreUrl, password);
+            _logger = log;
 
             ListResult<ShopifySharp.Order> orders = await _orderService.ListAsync();
             ShopifySharp.Order order = orders.Items.First();
@@ -92,12 +99,12 @@ namespace ShopifyServiceBusIntegration
 
             if (_AcctNum == _GeneralEcomNumber && order.PaymentGatewayNames.FirstOrDefault() == "Pay by Invoice")
             {
-                log.LogInformation("Potential Fraud. Customer requested 'Pay by Invoice' but has Generic account");
-                await HoldOrderFulfillment(order, log);
+                _logger.LogInformation("Potential Fraud. Customer requested 'Pay by Invoice' but has Generic account");
+                await HoldOrderFulfillment(order);
             }
             else
             {
-                FinalBodyString = await ProcessOrder(log);
+                FinalBodyString = await ProcessOrder();
             }
 
             SharedModels.OrderObject orderObject = JsonConvert.DeserializeObject<OrderObject>(FinalBodyString);
@@ -144,10 +151,10 @@ namespace ShopifyServiceBusIntegration
         }
 
         //HOLDS SHOPIFY ORDER WHEN CUSTOMER REQUESTS PAY-BY-INVOICE BUT NO PRE-APPROVED CREDIT ACCOUNT IS KNOWN
-        private static async Task HoldOrderFulfillment(ShopifySharp.Order order, ILogger log)
+        private static async Task HoldOrderFulfillment(ShopifySharp.Order order)
         {
             var fulfillmentOrders = await _fulfillmentOrderService.ListAsync(order.Id.Value);
-            log.LogInformation("Current shopify fullfillment orders: " + fulfillmentOrders.ToString());
+            _logger.LogInformation("Current shopify fullfillment orders: " + fulfillmentOrders.ToString());
 
             try
             {
@@ -159,7 +166,7 @@ namespace ShopifyServiceBusIntegration
             }
             catch (Exception ex)
             {
-                log.LogInformation($"Error while listing fulfillment orders: {ex}");
+                _logger.LogInformation($"Error while listing fulfillment orders: {ex}");
             }
 
             await _orderService.UpdateAsync(order.Id.Value, new ShopifySharp.Order()
@@ -169,9 +176,9 @@ namespace ShopifyServiceBusIntegration
             });
         }
 
-        private static async Task<string> ProcessOrder(ILogger log)
+        private static async Task<string> ProcessOrder()
         {
-            OrderObject orderObj = GenerateOrderObject(log);
+            OrderObject orderObj = GenerateOrderObject();
             var linesList =  new List<SharedModels.Line>();
 
             foreach (ShopifySharp.LineItem line in _Order.LineItems)
@@ -203,13 +210,13 @@ namespace ShopifyServiceBusIntegration
             orderObj.OrderLinesList.LineItems = linesList;
 
             var json = JsonConvert.SerializeObject(orderObj);
-            log.LogInformation($"{json}");
+            _logger.LogInformation($"{json}");
 
             return json;
         }
 
         //CONVERTS SHOPIFY ORDER INTO ORACLE ORDER-OBJECT
-        private static OrderObject GenerateOrderObject(ILogger log)
+        private static OrderObject GenerateOrderObject()
         {
             OrderObject orderObj = new OrderObject();
             if (_Order.ShippingAddress.FirstName == null)
@@ -217,8 +224,8 @@ namespace ShopifyServiceBusIntegration
                 _Order.ShippingAddress.FirstName = "";
             }
 
-            orderObj.CustomerRecord = GenerateCustomerRecord(log);
-            orderObj.OrderHeader = GenerateOrderHeader(log);
+            orderObj.CustomerRecord = GenerateCustomerRecord();
+            orderObj.OrderHeader = GenerateOrderHeader();
             orderObj.OrderLinesList = new LinesList();
             orderObj.POU = "US_CNR_OU";
 
@@ -226,7 +233,7 @@ namespace ShopifyServiceBusIntegration
         }
 
         //CONVERTS SHOPIFY-ORDER-INFORMATION INTO ORACLE CUSTOMER RECORD
-        private static CustomerRecord GenerateCustomerRecord(ILogger log)
+        private static CustomerRecord GenerateCustomerRecord()
         {
             CustomerRecord record = new CustomerRecord();
             try
@@ -260,13 +267,13 @@ namespace ShopifyServiceBusIntegration
             }
             catch (Exception ex)
             {
-                log.LogInformation("Error while generating Order Object -- Cutomer record. Error: " + ex.ToString());
+                _logger.LogInformation("Error while generating Order Object -- Cutomer record. Error: " + ex.ToString());
             }
             return record;
         }
 
         //CONVERTS SHOPIFY-ORDER-INFORMATION INTO ORACLE ORDER HEADER
-        private static Header GenerateOrderHeader(ILogger log)
+        private static Header GenerateOrderHeader()
         {
             Header header = new Header();
             try
@@ -286,7 +293,7 @@ namespace ShopifyServiceBusIntegration
             }
             catch (Exception ex)
             {
-                log.LogInformation("Error while generating Order Object -- Header Object. Error: " + ex.ToString());
+                _logger.LogInformation("Error while generating Order Object -- Header Object. Error: " + ex.ToString());
             }
             return header; 
         }
@@ -353,11 +360,9 @@ namespace ShopifyServiceBusIntegration
 
             double discount = ((double)(Convert.ToDouble(line.DiscountAllocations.FirstOrDefault()?.Amount) / line.Quantity));
 
-            List<SupportedBoxExtension> availableBoxExtensions = product.Tags.Split(',')
-                .Select(tag => tag.Trim())
-                .Where(tag => IsSupportedBoxExtension(tag))
-                .Select(tag => Enum.Parse<SupportedBoxExtension>(tag.ToUpper()))
-                .ToList();
+            HashSet<SupportedBoxExtension> availableBoxExtensions = AddSupportedBoxExtensions(product); 
+
+            
 
             List<ShopifySharp.ProductVariant> variants = product.Variants.ToList();
             foreach (ShopifySharp.ProductVariant variant in variants)
@@ -365,16 +370,17 @@ namespace ShopifyServiceBusIntegration
                 if (variant.SKU.Contains("/DR"))
                 {
                     isDrumSize = true;
+                    SharedModels.Line newLine = GenerateSingleLine(line, discount);
+                    linesList.Add(newLine);
                 }
             }
 
-            if (isDrumSize)
+            if(!isDrumSize)
             {
-                SharedModels.Line newLine = GenerateSingleLine(line, discount);
-                linesList.Add(newLine);
+
             }
 
-
+          
             foreach (Line dividedLineItem  in linesList)
             {
                 newLinesList.LineItems.Add(dividedLineItem);
@@ -382,7 +388,55 @@ namespace ShopifyServiceBusIntegration
             return newLinesList;
         }
 
-        public static SharedModels.Line GenerateSingleLine(ShopifySharp.LineItem line, double discount)
+        //ADDS POTENTIAL BOX EXTENSION VALUES TO HASH SET
+        private static HashSet<SupportedBoxExtension> AddSupportedBoxExtensions(Product product)
+        {
+            string sku = product.Variants.FirstOrDefault()?.SKU;
+
+            HashSet<SupportedBoxExtension> extensions = product.Tags.Split(',')
+                .Select(tag => tag.Trim())
+                .Where(tag => IsSupportedBoxExtension(tag))
+                .Select(tag => Enum.Parse<SupportedBoxExtension>(tag.ToUpper()))
+                .ToHashSet();
+
+            switch (sku)
+            {
+                case string s when s.Contains(SKUTypes.PCTA.ToString()):
+                    extensions.Add(SupportedBoxExtension.BXE);
+                    extensions.Add(SupportedBoxExtension.BXC);
+                    extensions.Add(SupportedBoxExtension.BXZ);
+                    break;
+
+                case string s when s.Contains(SKUTypes.PCTT.ToString()):
+                case string s1 when s1.Contains(SKUTypes.PCAT.ToString()):
+                case string s3 when s3.Contains(SKUTypes.PCST.ToString()):
+                case string s4 when s4.Contains(SKUTypes.PCMT.ToString()):
+                    extensions.Add(SupportedBoxExtension.BXA);
+                    break;
+
+                case string s when s.Contains(SKUTypes.PCTB.ToString()):
+                    extensions.Add(SupportedBoxExtension.BXH);
+                    break;
+
+                case string s when s.Contains(SKUTypes.PCFG.ToString()):
+                    extensions.Add(SupportedBoxExtension.BXG);
+                    break;
+                
+                case string s when s.Contains(SKUTypes.PCT.ToString()):
+                case string s1 when s1.Contains(SKUTypes.PCM.ToString()):
+                    extensions.Add(SupportedBoxExtension.BXE);
+                    break;
+                
+                default:
+                    extensions.Add(SupportedBoxExtension.BXA);
+                    break;
+            }
+
+            return extensions;
+        }
+
+        //CREATES A SINGLE ORACLE LINE ITEM FROM DIVIDED SHOPIFY SHARP LINE ITEM
+        private static SharedModels.Line GenerateSingleLine(ShopifySharp.LineItem line, double discount)
         {
             SharedModels.Line newLine = new SharedModels.Line();
             try
@@ -411,7 +465,7 @@ namespace ShopifyServiceBusIntegration
             }
             catch (Exception ex)
             {
-
+                _logger.LogInformation($"Error while Generating Oracle Order Object -- GenerateSingleLine(item)-- Error: {ex}");
             }
             
             return newLine;
