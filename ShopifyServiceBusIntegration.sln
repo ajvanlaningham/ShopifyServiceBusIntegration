@@ -5,6 +5,8 @@ VisualStudioVersion = 17.6.33723.286
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ShopifyServiceBusIntegration", "ShopifyServiceBusIntegration\ShopifyServiceBusIntegration.csproj", "{C2ED84B3-5EF0-47FF-84A6-BBB7620BCCE1}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SharedModels", "SharedModels\SharedModels.csproj", "{5D9AA16D-06DC-4673-B420-119EBA402271}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -15,6 +17,10 @@ Global
 		{C2ED84B3-5EF0-47FF-84A6-BBB7620BCCE1}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{C2ED84B3-5EF0-47FF-84A6-BBB7620BCCE1}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{C2ED84B3-5EF0-47FF-84A6-BBB7620BCCE1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5D9AA16D-06DC-4673-B420-119EBA402271}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5D9AA16D-06DC-4673-B420-119EBA402271}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5D9AA16D-06DC-4673-B420-119EBA402271}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5D9AA16D-06DC-4673-B420-119EBA402271}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
