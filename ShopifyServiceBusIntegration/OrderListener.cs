@@ -26,9 +26,9 @@ namespace ShopifyServiceBusIntegration
                 string password = Environment.GetEnvironmentVariable("ProdSecretKey");
                 OrderConfirmation orderUpdate = JsonConvert.DeserializeObject<OrderConfirmation>(myQueueItem);
 
-                await ProcessMessage(orderUpdate, log, shopifyStoreUrl, password);
+                await ProcessMessageAsync(orderUpdate, log, shopifyStoreUrl, password);
                 string Message = orderUpdate.OrderNumber;
-                await SendFlowMessage(Message);
+                await SendFlowMessageAsync(Message);
             }
             catch (Exception ex) 
             {
@@ -36,7 +36,8 @@ namespace ShopifyServiceBusIntegration
             }
         }
 
-        private async Task SendFlowMessage(string message)
+        //SENDS A MESSAGE TO A POWER AUTOMATE FLOW, WHICH IN TURNS SENDS AN EMAIL AND TEAMS MESSAGE THAT A NEW ORDER HAS BEEN PROCESSED AND IS WAITING FOR REVIEW
+        private async Task SendFlowMessageAsync(string message)
         {
             try
             {
@@ -74,7 +75,9 @@ namespace ShopifyServiceBusIntegration
             REF, INC
         }
 
-        private static async Task ProcessMessage(OrderConfirmation orderUpdate, ILogger log, string storeUrl, string password)
+        //FINDS THE CORRECT ORDER WITHIN THE MOST RECENT 50 ORDERS PLACED IN A SHOPIFY STOREFRONT
+        //INTERPRETS SERVICE BUS MESSAGE FOR SUCCESS/FAILURE
+        private static async Task ProcessMessageAsync(OrderConfirmation orderUpdate, ILogger log, string storeUrl, string password)
         {
             _orderService = new OrderService(storeUrl, password);
             _customerService = new CustomerService(storeUrl, password);
@@ -88,13 +91,13 @@ namespace ShopifyServiceBusIntegration
 
                 if (orderUpdate.ErrorMsg != null || orderUpdate.ErrorMsg != "")
                 {
-                    await UpdateOrderSuccess(orderUpdate, order, customer);
+                    await UpdateOrderSuccessAsync(orderUpdate, order, customer);
                 }
                 else
                 {
                     _logger.LogInformation($"An Error was reported from Oracle-- Error Message: {orderUpdate.ErrorMsg}");
                     order.Note = "Oracle error: " + orderUpdate.ErrorMsg;
-                    HoldOrderFulfillment(order);
+                    HoldOrderFulfillmentAsync(order);
                 }
             }
             catch (Exception ex) 
@@ -103,7 +106,9 @@ namespace ShopifyServiceBusIntegration
             }
         }
 
-        private static async Task UpdateOrderSuccess(OrderConfirmation orderUpdate, Order order, Customer customer)
+        //UPDATES SHOPIFY ORDER WITH NEW INFORMATION OBTAINED FROM SERVICE BUS MESSAGE
+        //UPDATES CUSTOMER WITH SITE-ID VALUE SO THAT FUTURE ORDERS WILL GO TO CORRECT LOCATION WITHOUT CREATING NEW ONE IN ORACLE
+        private static async Task UpdateOrderSuccessAsync(OrderConfirmation orderUpdate, Order order, Customer customer)
         {
             StringBuilder oracleOrderNumber = new StringBuilder(orderUpdate.OrderNumber, orderUpdate.OrderNumber.Length + 10);
             StringBuilder siteID = new StringBuilder($"SUID_{orderUpdate.SiteID}", 10);
@@ -130,7 +135,9 @@ namespace ShopifyServiceBusIntegration
             _logger.LogInformation("Order updated in shopify.");
         }
 
-        private static async void HoldOrderFulfillment(Order order)
+        //IF ERROR RETURNED, HOLDS ORDER FULFILLMENT IN SHOPIFY TO ALERT SHOP OWNER/ADMIN
+        //UPDATES ORDER WITH THE ERROR MESSAGE RETURNED FROM ORACLE
+        private static async void HoldOrderFulfillmentAsync(Order order)
         {
             var fulfillmentOrders = await _fulfillmentOrderService.ListAsync(order.Id.Value);
 
@@ -147,6 +154,7 @@ namespace ShopifyServiceBusIntegration
             });
         }
 
+        //GETS ACCOUNT NUMBER FROM CUSTOMER SHOPIFY PROFILE OR USES DEFAULT
         private static string GetAccountNumber(string tags)
         {
             string[] tagArray = tags.Split(',');
