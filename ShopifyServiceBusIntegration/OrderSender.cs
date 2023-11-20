@@ -1,7 +1,6 @@
 using System;
 using System.IO;
 using System.Threading.Tasks;
-using Microsoft.AspNetCore.Mvc;
 using Microsoft.Azure.WebJobs;
 using Microsoft.Azure.WebJobs.Extensions.Http;
 using Microsoft.AspNetCore.Http;
@@ -13,9 +12,8 @@ using System.Collections.Generic;
 using ShopifySharp.Lists;
 using System.Linq;
 using SharedModels;
-using ShopifySharp.GraphQL;
 using Product = ShopifySharp.Product;
-using Microsoft.AspNetCore.Builder;
+using LineItem = ShopifySharp.LineItem;
 using System.Globalization;
 
 namespace ShopifyServiceBusIntegration
@@ -348,7 +346,7 @@ namespace ShopifyServiceBusIntegration
             return str1 = str1.Length <= limit ? str1 : str1.Substring(0, limit);
         }
 
-        //TAKES EVERY SHOPIFY ORDER LINE ITEM AND BREAKS IT INTO LARGEST AVAILABLE UNIT-SIZES POSSIBLE TO FULFILL ORDER
+        //TAKES SHOPIFY ORDER LINE ITEM AND BREAKS IT INTO LARGEST AVAILABLE UNIT-SIZES POSSIBLE TO FULFILL ORDER
         //ADDS EACH UNIT TO THE ORACLE ORDER'S LINE ITEM LIST
         //RETURNS THE ORACLE ORDER LINE ITEM LIST
         private static SharedModels.LinesList GetDividedLineItems(ShopifySharp.LineItem line, Product product)
@@ -362,9 +360,8 @@ namespace ShopifyServiceBusIntegration
 
             HashSet<SupportedBoxExtension> availableBoxExtensions = AddSupportedBoxExtensions(product); 
 
-            
-
             List<ShopifySharp.ProductVariant> variants = product.Variants.ToList();
+
             foreach (ShopifySharp.ProductVariant variant in variants)
             {
                 if (variant.SKU.Contains("/DR"))
@@ -375,17 +372,108 @@ namespace ShopifyServiceBusIntegration
                 }
             }
 
-            if(!isDrumSize)
+            if(!isDrumSize && availableBoxExtensions.Any())
             {
+                while (line.Quantity > 0)
+                {
+                    StringBuilder skuExt = new StringBuilder("/", 4);
+                    var extensionActions = new Dictionary<SupportedBoxExtension, Action>
+                    {
+                        {SupportedBoxExtension.BXA, () => skuExt.Append(SupportedBoxExtension.BXA.ToString()) },
+                        {SupportedBoxExtension.BXG, () => skuExt.Append(SupportedBoxExtension.BXG.ToString()) },
+                        {SupportedBoxExtension.BXH, () => skuExt.Append(SupportedBoxExtension.BXH.ToString()) },
+                        {SupportedBoxExtension.BXD, () => skuExt.Append(SupportedBoxExtension.BXD.ToString()) },
+                        {SupportedBoxExtension.BXC, () =>
+                            {
+                                skuExt.Clear();
+                                skuExt.Append("/" + SupportedBoxExtension.BXC.ToString());
+                            }
+                        },
+                         {SupportedBoxExtension.BXE, () =>
+                            {
+                                skuExt.Clear();
+                                skuExt.Append("/" + SupportedBoxExtension.BXE.ToString());
+                            }
+                        },
+                          {SupportedBoxExtension.BXZ, () =>
+                            {
+                                skuExt.Clear();
+                                skuExt.Append("/" + SupportedBoxExtension.BXZ.ToString());
+                            }
+                        }
+                    };
 
+                    foreach (SupportedBoxExtension ext in availableBoxExtensions)
+                    {
+                        if (extensionActions.ContainsKey(ext))
+                        {
+                            extensionActions[ext].Invoke();
+                            line.SKU = skuExt.Insert(0, line.SKU).ToString();
+                            Line newLine = GenerateSingleLine(line, discount);
+                            linesList.Add(newLine);
+                            line.Quantity = line.Quantity - newLine.OrderedQuantity;
+                        }
+                        else if (availableBoxExtensions.Contains(SupportedBoxExtension.BXC) || 
+                                 availableBoxExtensions.Contains(SupportedBoxExtension.BXE) ||
+                                 availableBoxExtensions.Contains(SupportedBoxExtension.BXZ))
+                        {
+                            int partialQuantityMultiplier = 0; //VARIABLE USED TO CALCULATE WHOLE NUMBER MULTIPLES OF BOX SIZES. 
+                                                              // EXAMPLE: AN ORDER FOR 275 LBS COULD RESULT IN "5" BOXES OF 50 LBS +
+                                                              // 1 BOX OF 25. 335 LBS = "6" 50s, "1" 25, AND "2" 5s
+                            while (line.Quantity >= 50)
+                            {
+                                extensionActions[ext].Invoke();
+                                line.SKU = skuExt.Insert(0,line.SKU).ToString();
+                                partialQuantityMultiplier = Math.Min(line.Quantity.Value / 50, 50); //BXC = 50 LBS BOX
+                                LineItem partialLineItem = GeneratePartialItem(line, partialQuantityMultiplier * 50, skuExt);
+                                Line partialOracleLine = GenerateSingleLine(partialLineItem, discount);
+                                linesList.Add(partialOracleLine);
+                                line.Quantity = line.Quantity - (partialQuantityMultiplier * 50);
+                            }
+                            availableBoxExtensions.Remove(SupportedBoxExtension.BXC);
+
+                            if (line.Quantity >= 25)
+                            {
+                                extensionActions[ext].Invoke();
+                                line.SKU = skuExt.Insert(0, line.SKU).ToString();
+                                partialQuantityMultiplier = 1; //THERE CAN ONLY BE "1" 25 LBS BOX. ANY MORE AND IT WOULD JUST BE HANDLED BY THE 50 LBS BOX
+                                LineItem partialLineItem = GeneratePartialItem(line, 25, skuExt);
+                                Line partialOracleLine = GenerateSingleLine(partialLineItem, discount);
+                                linesList.Add(partialOracleLine);
+                                line.Quantity = line.Quantity - (25);
+                            }
+                            availableBoxExtensions.Remove(SupportedBoxExtension.BXE);
+
+                            while (line.Quantity > 0)
+                            {
+                                extensionActions[ext].Invoke();
+                                line.SKU = skuExt.Insert(0, line.SKU).ToString();
+                                partialQuantityMultiplier = Math.Min(line.Quantity.Value / 5, 5); //BXZ = 5 LBS BOX
+                                LineItem partialLineItem = GeneratePartialItem(line, partialQuantityMultiplier * 5, skuExt);
+                                Line partialOracleLine = GenerateSingleLine(partialLineItem, discount);
+                                linesList.Add(partialOracleLine);
+                                line.Quantity = line.Quantity - (partialQuantityMultiplier * 5);
+                            }
+                        }
+                    }
+                }
             }
 
-          
             foreach (Line dividedLineItem  in linesList)
             {
                 newLinesList.LineItems.Add(dividedLineItem);
             }
             return newLinesList;
+        }
+
+        private static LineItem GeneratePartialItem(ShopifySharp.LineItem line, int partialQuantity, StringBuilder skuExt)
+        {
+            LineItem lineItem = line;
+            lineItem.FulfillableQuantity = partialQuantity;
+            lineItem.Grams = partialQuantity * 454;
+            lineItem.Quantity = partialQuantity;
+
+            return lineItem;
         }
 
         //ADDS POTENTIAL BOX EXTENSION VALUES TO HASH SET
