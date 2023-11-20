@@ -11,7 +11,7 @@ local.settings.json
 *.sln.docstates
 
 # Ignore Visual Studio index files
-.vsidx/
+*.vsidx
 
 
 # User-specific files (MonoDevelop/Xamarin Studio)
