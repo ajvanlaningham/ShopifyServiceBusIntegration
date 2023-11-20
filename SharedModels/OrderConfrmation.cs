@@ -16,7 +16,7 @@ namespace SharedModels
         [JsonPropertyName("location_id")]
         public int LocationID { get; set; }
         [JsonPropertyName("order_number")]
-        public int OrderNumber { get; set; }
+        public string OrderNumber { get; set; }
         [JsonPropertyName("error_msg")]
         public string? ErrorMsg { get; set; }
     }
